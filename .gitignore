@@ -1,0 +1,12 @@
+# Written by Claude Code when it loads the mod from this folder
+.claude-plugin/types/
+.mcpb-cache/
+# Also the engine's: points the editor at the types above
+/tsconfig.json
+
+# OS and editors
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.log

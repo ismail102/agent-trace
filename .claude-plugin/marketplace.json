@@ -1,0 +1,6 @@
+{
+  "name": "agent-trace",
+  "description": "A live swimlane trace of Claude Code's work, drawn beside the chat",
+  "owner": { "name": "Ismail Hossain" },
+  "plugins": [{ "name": "agent-trace", "source": "./" }]
+}

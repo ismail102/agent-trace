@@ -1,0 +1,31 @@
+{
+  "name": "agent-trace",
+  "version": "0.2.0",
+  "description": "A live, animated picture of each turn beside the chat: a map of where the work goes, a swimlane timeline and insights charts covering model steps, tool calls, subagents, hooks and permission waits",
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
+  "author": { "name": "Ismail Hossain" },
+  "keywords": ["mod", "trace", "timeline", "map", "visualization", "observability", "tool calls", "subagents", "hooks", "permissions"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "detail": {
+      "type": "string",
+      "title": "Detail kept",
+      "description": "How much of each call's input is captured when no choice was made in the pane: names (file, host and program names), masked (arguments with secrets hidden and long text shortened) or full (whole arguments, kept in session memory only).",
+      "default": "names",
+      "options": ["names", "masked", "full"]
+    },
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the pane at start",
+      "description": "Open the Agent Trace pane when a session starts. Off, open it with /agent-trace.",
+      "default": true
+    },
+    "keepTurns": {
+      "type": "number",
+      "title": "Turns kept",
+      "description": "How many recent turns the pane keeps (1 to 50).",
+      "default": 10
+    }
+  }
+}
