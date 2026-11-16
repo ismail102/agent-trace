@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - **Station icons.** Each station on the ring has its own icon. An idle station is a white ring with a white icon. Once used, the icon fades to a watermark under a bright call count.
 - **No overlapping text on the map.** Every station is the same size, and each label block is placed clear of its ring and its neighbours, with a dark outline so lines under it stay readable. `×N` moves beside the station's name, and `NEEDS YOU` moves into You's label.
