@@ -7,7 +7,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Category, Filter, Mode, Span, Tier, Trace, Turn, View } from '../types'
-import { categoryOf, inputOf, isBackground, labelOf, oneLine, resultOf, riskOf } from './capture'
+import { categoryOf, doingOf, hostFor, inputOf, isBackground, labelOf, memoryIo, memoryWriteSize, oneLine, resultOf, riskOf } from './capture'
 import { brailleCells, brailleSize } from './braille'
 import { MAP_KEY, drawPane } from './draw'
 import { BG_LANE, EMPTY, activeTurn, addSpan, closeTurn, ensureLane, findOpen, mapActive, patchSpan, startTurn } from './trace'
@@ -196,6 +196,7 @@ export const register: Register = (on, options) => {
             parent: e.index === 0 ? (lane === 'main' ? 'Your message' : 'Its spawn') : parentOf(withLane, lane),
             input: `Model request · ${e.model}${e.effort !== undefined ? ` · effort ${e.effort}` : ''} · ${e.messageCount} messages`,
             tier,
+            model: e.model,
           },
         )
       }),
@@ -281,6 +282,8 @@ export const register: Register = (on, options) => {
     const isBg = isBackground(args) && e.agentId === undefined
     const lane = isBg ? 'bg' : laneOf(e.agentId)
     const id = e.tool_use_id || `call:${now}:${tool}`
+    const cat = categoryOf(tool, args)
+    const io = cat === 'memory' ? memoryIo(tool) : undefined
 
     await update($, trace, t =>
       mapActive(t, turn => {
@@ -293,7 +296,7 @@ export const register: Register = (on, options) => {
           {
             id,
             lane,
-            cat: categoryOf(tool),
+            cat,
             label: labelOf(tool, args, tier),
             t0: rel(withLanes, now),
             status: 'run',
@@ -302,6 +305,11 @@ export const register: Register = (on, options) => {
             tier,
             risk: riskOf(tool, args),
             tool,
+            // Names only: names. Above that, the call's own description where it gives one.
+            doing: tier !== 'names' && typeof args.description === 'string' && args.description.trim() !== '' ? oneLine(args.description, 60) : doingOf(tool, args),
+            host: hostFor(tool, args),
+            io,
+            bytes: io === 'write' ? memoryWriteSize(args) : undefined,
           },
         )
       }),
@@ -331,6 +339,8 @@ export const register: Register = (on, options) => {
           status: stillRunning ? 'run' : status,
           waitTo,
           result: stillRunning ? 'Started in the background · still running' : result,
+          // A memory read is sized by what came back.
+          ...(span.io === 'read' && !failed ? { bytes: (ran.text ?? '').length } : {}),
         })
         if (span.waitFrom !== undefined && waitTo !== undefined) {
           patched = addSpan(

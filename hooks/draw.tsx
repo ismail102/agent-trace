@@ -13,7 +13,7 @@ import { brailleCells, brailleSize } from './braille'
 import { insightsSvg, insightsText } from './insights'
 import { describeMap, esc, mapSvg } from './mapsvg'
 import { COLORS, ERR, INK, LIVE, WAIT } from './palette'
-import { NAMES, STATIONS, buildScene, isMarker } from './scene'
+import { NAMES, STATIONS, buildScene, formatSize, isMarker, shortModel } from './scene'
 import { formatMs, formatTokens, turnLength } from './trace'
 
 export { COLORS } from './palette'
@@ -549,6 +549,54 @@ function terminalMap(els: Els, turn: Turn, now: number, columns: number, rows: n
           </Text>
         ))}
       </Text>
+      {scene.stations
+        .filter(s => s.isCaptionLive && s.caption)
+        .map(s => (
+          <Text key={`now-${s.cat}`}>
+            <Text color={COLORS[s.cat]}>▶ {NAMES[s.cat]}</Text> {clip(s.caption!, Math.max(10, columns - 30))}
+            {s.by && s.by !== 'main loop' ? <Text dimColor> · {s.by}</Text> : ''}
+          </Text>
+        ))}
+      {!scene.stations.find(s => s.cat === 'model')!.isCaptionLive && scene.model ? (
+        <Text dimColor>
+          <Text color={COLORS.model}>■</Text> Model {shortModel(scene.model)}
+          {scene.context > 0 ? ` · context ${formatTokens(scene.context)}` : ''}
+        </Text>
+      ) : (
+        ''
+      )}
+      {scene.memory.reads + scene.memory.writes > 0 && (
+        <Text>
+          <Text color={COLORS.memory}>■ Memory</Text> {formatSize(scene.memory.read + scene.memory.written)}
+          <Text dimColor>
+            {' '}· {scene.memory.writes} saved · {scene.memory.reads} read{scene.memory.files.length ? ` · ${clip(scene.memory.files.join(', '), 40)}` : ''}
+          </Text>
+        </Text>
+      )}
+      {scene.browserHost && (
+        <Text>
+          <Text color={COLORS.browser}>■ Browser</Text> <Text dimColor>on</Text> {scene.browserHost}
+        </Text>
+      )}
+      {scene.satellites.map(sat => (
+        <Text key={`sat-${sat.id}`}>
+          <Text color={COLORS.agents}>◆ {sat.name}</Text>
+          <Text dimColor>
+            {sat.sub ? ` ${sat.sub}` : ''}
+            {sat.model ? ` · ${sat.model}` : ''}
+          </Text>
+          {sat.links.length > 0 ? ' → ' : ''}
+          {sat.links.map((l, i) => (
+            <Text>
+              {i > 0 ? ', ' : ''}
+              <Text color={COLORS[l.cat]}>
+                {NAMES[l.cat]} {l.calls}
+              </Text>
+            </Text>
+          ))}
+          {sat.doing ? <Text color={sat.isRunning ? LIVE : undefined} dimColor={!sat.isRunning}> · {sat.isRunning ? '▶ ' : ''}{clip(sat.doing, 30)}</Text> : ''}
+        </Text>
+      ))}
       {scene.waitingFrom.length > 0 && <Text color={WAIT}>Waiting on you: {scene.waitingFrom.map(c => NAMES[c]).join(', ')}</Text>}
     </Box>
   )
@@ -628,22 +676,32 @@ export function drawPane(
     )
   }
 
+  // The graph comes first, so it is on screen without scrolling: one compact
+  // row for the title, the view switch and history, then the picture, then
+  // the summary, the spans, the inspector and the detail kept.
   return (
     <Box flexDirection="column" gap={isTerminal ? 0 : 1}>
       <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
-        <Text>
-          <Text bold>Agent Trace</Text>
-          <Text dimColor>
-            {'  '}Turn {index + 1} of {turns.length}
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          <Text>
+            <Text bold>Agent Trace</Text>
+            <Text dimColor>
+              {'  '}Turn {index + 1} of {turns.length}
+            </Text>
+            {running ? <Text color={LIVE}> · live</Text> : <Text dimColor>{turn.reason && turn.reason !== 'answer' ? ` · ${turn.reason}` : ''}</Text>}
           </Text>
-          {running ? <Text color={LIVE}> · live</Text> : <Text dimColor>{turn.reason && turn.reason !== 'answer' ? ` · ${turn.reason}` : ''}</Text>}
-        </Text>
+          {MODES.map(([id, label]) => (
+            <Button key={`m-${id}`} label={label} variant={mode === id ? 'primary' : 'secondary'} onPress={() => act.setMode(id)} />
+          ))}
+        </Box>
         <Box flexDirection="row" gap={1}>
           {index > 0 && <Button key="older" label="◀ Older" plain onPress={act.older} />}
           {index < turns.length - 1 && <Button key="newer" label="Newer ▶" plain onPress={act.newer} />}
           <Button key="clear" label="Clear" plain onPress={act.clear} />
         </Box>
       </Box>
+
+      {body}
 
       {isTerminal ? (
         <Text>
@@ -671,14 +729,6 @@ export function drawPane(
           ))}
         </Box>
       )}
-
-      <Box flexDirection="row" gap={1}>
-        {MODES.map(([id, label]) => (
-          <Button key={`m-${id}`} label={label} variant={mode === id ? 'primary' : 'secondary'} onPress={() => act.setMode(id)} />
-        ))}
-      </Box>
-
-      {body}
 
       <Box flexDirection="column">
         <Text dimColor>

@@ -51,8 +51,8 @@ function engine(on: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function step($: any, turnId: string, index: number, agentId?: string) {
-  const s = $.turn.step({ turnId, index, model: 'opus', messageCount: 3, ...(agentId ? { agentId } : {}) })
+async function step($: any, turnId: string, index: number, agentId?: string, model = 'opus') {
+  const s = $.turn.step({ turnId, index, model, messageCount: 3, ...(agentId ? { agentId } : {}) })
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   for await (const _ of s) {
     // drain
@@ -259,4 +259,82 @@ test('an empty trace says how to start', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /No turns yet/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('the map names who is working: the model, the shell, the browser, memory, and each subagent’s links', async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 6_000_000 })
+  mock.store(on)
+  const hold = deferred<unknown>()
+  on('tool.call', (_, e) => {
+    if (e.tool === 'Read') return { result: 'ok', text: 'x'.repeat(2400) }
+    if (e.tool === 'Bash' || e.tool === 'mcp__claude-in-chrome__navigate' || e.tool === 'Grep') return hold.promise
+
+    return { result: 'ok', text: 'ok' }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'check the site', turnId: 't1' })
+  await step($, 't1', 0, undefined, 'claude-opus-5-5')
+  await $.tool.call({ tool: 'Write', file_path: '/home/u/.claude/projects/p/memory/user-role.md', content: 'y'.repeat(600) })
+  await $.tool.call({ tool: 'Read', file_path: '/home/u/.claude/projects/p/memory/MEMORY.md' })
+  const sh = $.tool.call({ tool: 'Bash', command: 'git status --short' })
+  const nav = $.tool.call({ tool: 'mcp__claude-in-chrome__navigate', url: 'https://www.example.org/search?q=secret' })
+  await $.turn.start({ text: 'find the tests', turnId: 'a-t1', agentId: 'a1' })
+  await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'Explore' })
+  await step($, 'a-t1', 0, 'a1', 'claude-haiku-5-5')
+  const grep = $.tool.call({ tool: 'Grep', pattern: 'token', path: '/src', agentId: 'a1' })
+  await clock.advance(800)
+
+  // The graph comes first: before the summary, the span list and the inspector.
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const svg = await ui.find({ type: 'Svg' })
+  const map = String(svg?.props.source)
+  expect(map).toContain('opus-5-5')
+  expect(map).toContain('git status')
+  expect(map).toContain('example.org')
+  expect(map).not.toContain('secret')
+  expect(map).toContain('3.0k chars in memory')
+  expect(map).toContain('1 saved · 1 read')
+  expect(map).toContain('Explore')
+  expect(map).toContain('haiku-5-5')
+  expect(map).toContain('Agent A (Explore) → Files: 1 call')
+  const tree = JSON.stringify(ui.tree ?? '')
+  if (tree.length > 2) expect(tree.indexOf('PARALLELISM')).toBeLessThan(tree.indexOf('Turn time'))
+  await ui.unmount()
+
+  // The terminal says the same in words.
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await term.find({ type: 'Text', text: /▶ Shell git status/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /Memory 3\.0k chars/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /Agent A Explore · haiku-5-5 → Files 1/ })).toBeDefined()
+  await term.unmount()
+
+  hold.resolve({ result: 'ok', text: 'ok' })
+  await Promise.all([sh, nav, grep])
+})
+
+test('captions follow the detail kept: names only, else the call’s own description', async ($, on) => {
+  engine(on)
+  mock.clock(on, { now: 7_000_000 })
+  mock.store(on)
+  on('tool.call', () => ({ result: 'ok', text: 'ok' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'test it', turnId: 't1' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test -- --token=abc', description: 'Run the unit tests' })
+
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  let map = String((await ui.find({ type: 'Svg' }))?.props.source)
+  expect(map).toContain('npm test')
+  expect(map).not.toContain('Run the unit tests')
+  expect(map).not.toContain('abc')
+  await ui.press({ key: 't-masked' })
+  await ui.unmount()
+
+  await $.tool.call({ tool: 'Bash', command: 'npm run lint', description: 'Lint the code' })
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  map = String((await ui.find({ type: 'Svg' }))?.props.source)
+  expect(map).toContain('Lint the code')
+  await ui.unmount()
 })

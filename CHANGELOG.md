@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+- **The graph comes first.** The title, the view switch and the history buttons share one row. The picture comes straight after them, followed by the turn summary, the spans, the inspector and the detail kept.
+- **Live captions on the map**, names only at the default detail level, the call's own description at the higher ones:
+  - Model: the model's name, and `thinking` while a step runs.
+  - Shell: the program and its subcommand.
+  - Browser: the action and the site it is on.
+  - Network: the host.
+  - Files: the file name.
+  - Any station: `by Agent X` while a subagent does the work.
+- **Memory**: Claude's memory files (CLAUDE.md, MEMORY.md, `memory/`) now count as Memory, not Files. The station shows how many characters the turn has written to memory and read back, as it happens.
+- **Subagent links**: each satellite links to the stations its subagent used, tagged `A·3`. A link marches and carries a pulse while one of its calls runs there. Satellites show their type, model and current call.
+- **The hub** shows the main model and the context size of the newest step.
+- The terminal map lists the same in words under the braille picture.
+
 ## 0.2.0
 
 - A new **Map** view, the default: the main loop as a hub with a station for each kind of work. Running calls pulse out along spokes and comets run back when they end. Spokes wear in with use. Stations carry run arcs, failure and wait badges, and a marching amber line to You while a call waits on you. The route runs round an inner orbit. Subagents are satellites with their own call mix. The hub has rings for where the time went and for tokens, and the map shows parallelism and cache-hit read-outs.

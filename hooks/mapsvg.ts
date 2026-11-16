@@ -32,7 +32,8 @@ import {
   spoke,
   stationPoint,
 } from './scene'
-import type { Point, Station } from './scene'
+import { formatSize, satLinkPoints, shortModel } from './scene'
+import type { Point, Scene, Station } from './scene'
 import { formatMs, formatTokens } from './trace'
 
 const f = (n: number) => (Math.round(n * 10) / 10).toString()
@@ -82,7 +83,11 @@ function begin(msAgo: number): string {
   return `${f(-msAgo / 1000)}s`
 }
 
-function drawStation(st: Station, out: string[]): void {
+function clip(text: string, chars: number): string {
+  return text.length > chars ? `${text.slice(0, chars - 1)}…` : text
+}
+
+function drawStation(st: Station, scene: Scene, out: string[]): void {
   const color = COLORS[st.cat]
   const used = st.count > 0
   const { x, y } = st.at
@@ -133,6 +138,30 @@ function drawStation(st: Station, out: string[]): void {
       `<text x="${f(lx)}" y="${f(nameY + 13)}" text-anchor="${anchor}" font-size="10" fill="${INK.dim}" font-family="JetBrains Mono, Consolas, monospace">${esc(formatMs(st.busyMs))} · ${Math.round(st.share * 100)}%</text>`,
     )
   }
+
+  // Captions: what it is doing now (bright, with who is doing it), else what it last did.
+  const lines: { text: string; color: string; weight?: number }[] = []
+  const room = anchor === 'middle' ? 30 : 24
+  if (st.caption) {
+    lines.push({ text: `${st.isCaptionLive ? '▶ ' : ''}${clip(st.caption, room)}`, color: st.isCaptionLive ? color : INK.dim, weight: st.isCaptionLive ? 600 : 400 })
+    if (st.isCaptionLive && st.by && st.by !== 'main loop') lines.push({ text: clip(`by ${st.by}`, room), color: INK.dim })
+  }
+  if (st.cat === 'browser' && scene.browserHost && !(st.caption ?? '').includes(scene.browserHost)) {
+    lines.push({ text: clip(`on ${scene.browserHost}`, room), color: INK.dim })
+  }
+  if (st.cat === 'memory' && used) {
+    const m = scene.memory
+    // How much memory went through this turn, then how it split.
+    lines.push({ text: `◆ ${formatSize(m.read + m.written)} in memory`, color, weight: 700 })
+    lines.push({ text: `${m.writes} saved · ${m.reads} read`, color: INK.dim })
+  }
+  lines.forEach((ln, i) => {
+    // Above the name for the top station; under the time line everywhere else.
+    const yy = top ? nameY - 13 * (lines.length - i) : nameY + 26 + i * 12
+    out.push(
+      `<text x="${f(lx)}" y="${f(yy)}" text-anchor="${anchor}" font-size="10" font-weight="${ln.weight ?? 400}" fill="${ln.color}">${esc(ln.text)}</text>`,
+    )
+  })
 
   // Badges: failures top right, waits on you top left.
   const bx = st.r * 0.75
@@ -239,6 +268,38 @@ export function mapSvg(turn: Turn, now: number): string {
 
   // Satellites: each subagent, linked to Agents, ringed by its own mix of calls.
   const agents = scene.stations.find(s => s.cat === 'agents')!
+
+  // Each subagent's links to the stations it used: thicker with more calls, a
+  // pulse riding the link while one of its calls runs there, named by its letter.
+  scene.satellites.forEach((sat, i) => {
+    const letter = sat.name.replace(/^Agent /, '')
+    for (const link of sat.links) {
+      const st = scene.stations.find(s => s.cat === link.cat)
+      if (!st) continue
+      const pts = satLinkPoints(sat.at, st, i)
+      const d = polyPath(pts)
+      const color = COLORS[link.cat]
+      const width = 1 + Math.min(3, Math.log2(1 + link.calls))
+      out.push(
+        `<path d="${d}" fill="none" stroke="${color}" stroke-width="${f(width)}" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="${link.isRunning ? '6 4' : '2 4'}" opacity="${link.isRunning ? 0.9 : 0.45}"><title>${esc(`${sat.name}${sat.sub ? ` (${sat.sub})` : ''} → ${NAMES[link.cat]}: ${link.calls} call${link.calls === 1 ? '' : 's'}`)}</title>${
+          link.isRunning ? `<animate attributeName="stroke-dashoffset" from="20" to="0" dur="0.7s" begin="${begin(scene.nowRel % 700)}" repeatCount="indefinite"/>` : ''
+        }</path>`,
+      )
+      if (link.isRunning) {
+        const dur = Math.max(0.8, pathLength(pts) / 260)
+        out.push(
+          `<circle r="3.4" fill="${color}" filter="url(#glow)"><animateMotion path="${d}" dur="${f(dur)}s" begin="${begin(scene.nowRel % (dur * 1000))}" repeatCount="indefinite"/></circle>`,
+        )
+      }
+      // The link's name, near where it arrives.
+      const tag = pts[Math.max(1, pts.length - 5)]!
+      out.push(
+        `<g><rect x="${f(tag.x - 15)}" y="${f(tag.y - 8)}" width="30" height="13" rx="6.5" fill="${INK.well}" stroke="${color}" stroke-width="0.8" opacity="0.92"/>`,
+        `<text x="${f(tag.x)}" y="${f(tag.y + 2)}" text-anchor="middle" font-size="8.5" font-weight="700" fill="${color}">${esc(clip(letter, 2))}·${link.calls}</text></g>`,
+      )
+    }
+  })
+
   for (const sat of scene.satellites) {
     const color = COLORS.agents
     out.push(
@@ -257,7 +318,11 @@ export function mapSvg(turn: Turn, now: number): string {
       `<circle cx="${f(sat.at.x)}" cy="${f(sat.at.y)}" r="12" fill="${INK.well}" stroke="${color}" stroke-width="1.5"/>`,
       ring(sat.at.x, sat.at.y, 16, 3.5, parts),
       `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 4)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}">${esc(sat.name.replace(/^Agent /, ''))}</text>`,
-      `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 31)}" text-anchor="middle" font-size="9.5" fill="${INK.dim}">${esc((sat.sub || sat.name).slice(0, 16))}</text>`,
+      `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 31)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK.text}">${esc(clip(sat.sub || sat.name, 18))}</text>`,
+      sat.model ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 42)}" text-anchor="middle" font-size="8.5" fill="${COLORS.model}">${esc(clip(sat.model, 18))}</text>` : '',
+      sat.doing
+        ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + (sat.model ? 53 : 42))}" text-anchor="middle" font-size="8.5" fill="${sat.isRunning ? color : INK.dim}">${esc(clip(`${sat.isRunning ? '▶ ' : ''}${sat.doing}`, 20))}</text>`
+        : '',
       '</g>',
     )
     if (sat.isRunning) {
@@ -300,7 +365,7 @@ export function mapSvg(turn: Turn, now: number): string {
     })
   }
 
-  for (const st of scene.stations) drawStation(st, out)
+  for (const st of scene.stations) drawStation(st, scene, out)
 
   // The hub: where the time went, the tokens, the clock.
   const u = turn.usage
@@ -330,7 +395,11 @@ export function mapSvg(turn: Turn, now: number): string {
   out.push(
     `<text x="${CX}" y="${CY - 20}" text-anchor="middle" font-size="8.5" font-weight="700" letter-spacing="1.6" fill="${scene.isLive ? LIVE : INK.dim}">${scene.isLive ? '● LIVE' : 'MAIN LOOP'}</text>`,
     `<text x="${CX}" y="${CY + 5}" text-anchor="middle" font-size="19" font-weight="700" fill="${INK.text}" font-family="${mono}">${esc(sec(scene.len))}</text>`,
-    `<text x="${CX}" y="${CY + 20}" text-anchor="middle" font-size="9.5" fill="${INK.dim}">${scene.steps} step${scene.steps === 1 ? '' : 's'}${scene.model ? ` · ${esc(scene.model.slice(0, 14))}` : ''}</text>`,
+    `<text x="${CX}" y="${CY + 19}" text-anchor="middle" font-size="9.5" fill="${INK.dim}">${scene.steps} step${scene.steps === 1 ? '' : 's'}</text>`,
+    scene.model ? `<text x="${CX}" y="${CY + 30}" text-anchor="middle" font-size="9" font-weight="600" fill="${COLORS.model}">${esc(clip(shortModel(scene.model), 14))}</text>` : '',
+    scene.context > 0
+      ? `<text x="${CX}" y="${CY + 40}" text-anchor="middle" font-size="8" fill="${INK.dim}"><title>${esc(`The newest step sent ${scene.context.toLocaleString('en-US')} tokens of context`)}</title>ctx ${formatTokens(scene.context)}</text>`
+      : '',
   )
 
   // Corner read-outs.

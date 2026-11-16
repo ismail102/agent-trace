@@ -49,6 +49,16 @@ export type Span = {
   tokCache?: number
   risk?: string
   tool?: string
+  /** The model a step ran on. */
+  model?: string
+  /** A memory call's size in characters: what it wrote, or what it read back. */
+  bytes?: number
+  /** Whether a memory call read or wrote. */
+  io?: 'read' | 'write'
+  /** What the map says the call is doing, kept at the names tier: a program, a host, a browser action. */
+  doing?: string
+  /** The site a network or browser call went to. */
+  host?: string
 }
 
 export type Lane = { id: string; name: string; sub: string }

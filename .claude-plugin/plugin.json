@@ -1,6 +1,6 @@
 {
   "name": "agent-trace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A live, animated picture of each turn beside the chat: a map of where the work goes, a swimlane timeline and insights charts covering model steps, tool calls, subagents, hooks and permission waits",
   "license": "MIT",
   "icon": "./.claude-plugin/icon.png",

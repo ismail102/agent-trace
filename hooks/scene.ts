@@ -7,7 +7,7 @@ import { turnLength } from './trace'
 
 /** The drawing's own units; the SVG uses them as pixels, the braille map scales them to dots. */
 export const MAP_W = 760
-export const MAP_H = 560
+export const MAP_H = 590
 
 /** Where satellites sit, as turns (radians) off the Agents bearing: beside it first, then further round. */
 const SATELLITE_TURNS = [-0.95, 0.95, -1.35, 1.35, -0.62, 0.62]
@@ -59,7 +59,16 @@ export type Station = {
   flash: boolean
   /** Share of all busy time, 0 to 1. */
   share: number
+  /** What it is doing now, or what it last did: drawn beside the station. */
+  caption?: string
+  /** Whether the caption is live work rather than the last thing done. */
+  isCaptionLive: boolean
+  /** Who is doing it: the main loop or a subagent's name, while it runs. */
+  by?: string
 }
+
+/** A subagent's calls at one station: drawn as a link from the satellite to it. */
+export type SatLink = { cat: Category; calls: number; isRunning: boolean }
 
 export type Satellite = {
   id: string
@@ -69,7 +78,16 @@ export type Satellite = {
   calls: number
   byCat: Partial<Record<Category, number>>
   isRunning: boolean
+  /** The model its steps ran on. */
+  model?: string
+  /** What it is doing now, or did last. */
+  doing?: string
+  /** The stations it used, model steps left out. */
+  links: SatLink[]
 }
+
+/** Claude's memory this turn: what was read back and written, in characters. */
+export type MemoryUse = { read: number; written: number; reads: number; writes: number; files: string[] }
 
 export type Leg = { from: Category; to: Category; age: number }
 
@@ -90,6 +108,24 @@ export type Scene = {
   parallelism: number
   steps: number
   model: string
+  memory: MemoryUse
+  /** The context the newest main-loop step sent, in tokens: cached and new input. */
+  context: number
+  /** The site the browser is on, the newest one named. */
+  browserHost?: string
+}
+
+/** A model id as people say it: `claude-opus-5-5-20260101` reads `opus-5-5`. */
+export function shortModel(model: string): string {
+  return model.replace(/^(us\.|eu\.)?anthropic\./, '').replace(/^claude-/, '').replace(/-\d{8}(-v\d+(:\d+)?)?$/, '').replace(/\[1m\]$/, ' 1M')
+}
+
+/** A size in characters as people read it. */
+export function formatSize(chars: number): string {
+  if (chars < 1000) return `${chars} chars`
+  if (chars < 1_000_000) return `${(chars / 1000).toFixed(1)}k chars`
+
+  return `${(chars / 1_000_000).toFixed(2)}M chars`
 }
 
 /** A zero-length mark on the Events lane: an ask, an answer, the end. */
@@ -130,8 +166,10 @@ export function buildScene(turn: Turn, now: number): Scene {
       returning: [],
       flash: false,
       share: 0,
+      isCaptionLive: false,
     })
   }
+  const laneName = (id: string) => (id === 'main' || id === 'bg' ? 'main loop' : (turn.lanes.find(l => l.id === id)?.name ?? id))
 
   let totalBusy = 0
   for (const s of turn.spans) {
@@ -163,6 +201,66 @@ export function buildScene(turn: Turn, now: number): Scene {
     st.r = 15 + Math.min(13, Math.sqrt(st.busyMs / 1000) * 4)
   }
 
+  // Captions: what each station is doing now, else what it last did.
+  const work = (s: Span) => !isMarker(s) && s.lane !== 'events'
+  for (const st of stations) {
+    if (st.cat === 'model' || st.cat === 'you' || st.cat === 'hooks') continue
+    const newest = [...st.running].sort((a, b) => a.ms - b.ms)[0]?.span
+    if (newest) {
+      const more = st.running.length > 1 ? ` +${st.running.length - 1}` : ''
+      st.caption = `${newest.doing ?? newest.label}${more}`
+      st.isCaptionLive = true
+      st.by = laneName(newest.lane)
+    } else {
+      const last = turn.spans.filter(s => s.cat === st.cat && work(s)).sort((a, b) => a.t0 - b.t0).pop()
+      if (last) st.caption = last.doing ?? last.label
+    }
+  }
+
+  // The model: which model, and whose step it is running now.
+  const steps = turn.spans.filter(s => s.cat === 'model').sort((a, b) => a.t0 - b.t0)
+  const modelSt = per.get('model')!
+  const thinking = steps.filter(s => s.t1 === undefined && isLive)
+  const lastStep = steps[steps.length - 1]
+  const mainModel = turn.lanes.find(l => l.id === 'main')?.sub || lastStep?.model || ''
+  if (thinking.length > 0) {
+    const s = thinking[thinking.length - 1]!
+    modelSt.caption = `${shortModel(s.model ?? mainModel)} · thinking${thinking.length > 1 ? ` ×${thinking.length}` : ''}`
+    modelSt.isCaptionLive = true
+    modelSt.by = s.lane === 'main' ? `main loop ${s.label}` : `${laneName(s.lane)} ${s.label}`
+  } else if (mainModel) {
+    modelSt.caption = shortModel(mainModel)
+  }
+
+  // Your answers and the hooks: the newest one.
+  for (const cat of ['you', 'hooks'] as const) {
+    const st = per.get(cat)!
+    const last = turn.spans.filter(s => s.cat === cat && !/^(Answer ready|Interrupted|Refused|Ended)/.test(s.label)).sort((a, b) => a.t0 - b.t0).pop()
+    if (last) st.caption = last.label
+  }
+
+  // Memory: how much was read back and written this turn.
+  const memory: MemoryUse = { read: 0, written: 0, reads: 0, writes: 0, files: [] }
+  for (const s of turn.spans) {
+    if (s.cat !== 'memory' || !work(s)) continue
+    if (s.io === 'write') {
+      memory.writes += 1
+      memory.written += s.bytes ?? 0
+    } else {
+      memory.reads += 1
+      memory.read += s.bytes ?? 0
+    }
+    const file = /^(?:saving|recalling) (.+)$/.exec(s.doing ?? '')?.[1]
+    if (file && !memory.files.includes(file)) memory.files.push(file)
+  }
+
+  // The browser: the site it is on, the newest one named.
+  const browserHost = turn.spans.filter(s => s.cat === 'browser' && s.host).sort((a, b) => a.t0 - b.t0).pop()?.host
+
+  // Context: what the newest main-loop step sent.
+  const lastMain = steps.filter(s => s.lane === 'main' && s.tokIn !== undefined).pop()
+  const context = lastMain ? (lastMain.tokIn ?? 0) + (lastMain.tokCache ?? 0) : 0
+
   // Subagents: satellites beside the Agents station, either side of its
   // label, which stands straight out from the hub.
   const subLanes = turn.lanes.filter(l => isSub(l.id))
@@ -176,9 +274,20 @@ export function buildScene(turn: Turn, now: number): Scene {
       x: clamp(agentsAt.at.x + Math.cos(a) * reach, 40, MAP_W - 40),
       y: clamp(agentsAt.at.y + Math.sin(a) * reach, 30, MAP_H - 22),
     }
-    const mine = turn.spans.filter(s => s.lane === lane.id)
+    const mine = turn.spans.filter(s => s.lane === lane.id).sort((a, b) => a.t0 - b.t0)
     const byCat: Partial<Record<Category, number>> = {}
-    for (const s of mine) byCat[s.cat] = (byCat[s.cat] ?? 0) + 1
+    const live = new Set<Category>()
+    for (const s of mine) {
+      byCat[s.cat] = (byCat[s.cat] ?? 0) + 1
+      if (isLive && s.t1 === undefined) live.add(s.cat)
+    }
+    const links: SatLink[] = (Object.keys(byCat) as Category[])
+      .filter(c => c !== 'model' && c !== 'agents' && STATIONS.includes(c))
+      .map(c => ({ cat: c, calls: byCat[c] ?? 0, isRunning: live.has(c) }))
+    const runningNow = mine.filter(s => isLive && s.t1 === undefined && s.cat !== 'model').pop()
+    const thinkingNow = mine.some(s => isLive && s.t1 === undefined && s.cat === 'model')
+    const lastCall = mine.filter(s => s.cat !== 'model' && !isMarker(s)).pop()
+    const model = mine.filter(s => s.cat === 'model' && s.model).pop()?.model
 
     return {
       id: lane.id,
@@ -188,6 +297,9 @@ export function buildScene(turn: Turn, now: number): Scene {
       calls: mine.length,
       byCat,
       isRunning: isLive && mine.some(s => s.t1 === undefined),
+      model: model ? shortModel(model) : undefined,
+      doing: runningNow ? (runningNow.doing ?? runningNow.label) : thinkingNow ? 'thinking' : lastCall ? (lastCall.doing ?? lastCall.label) : undefined,
+      links,
     }
   })
 
@@ -222,7 +334,37 @@ export function buildScene(turn: Turn, now: number): Scene {
     parallelism: totalBusy / len,
     steps: turn.steps,
     model: main?.sub ?? '',
+    memory,
+    context,
+    browserHost,
   }
+}
+
+/** The ring a subagent's links run round, inside the stations and outside the route. */
+export const LINK_ORBIT = 154
+
+/**
+ * A link from a subagent to a station it used: in from the satellite to the
+ * link orbit, round it the short way, and out to the station's rim.
+ */
+export function satLinkPoints(from: Point, st: Station, lane: number): Point[] {
+  const a0 = Math.atan2(from.y - CY, from.x - CX)
+  const a1 = Math.atan2(st.at.y - CY, st.at.x - CX)
+  let d = a1 - a0
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d <= -Math.PI) d += Math.PI * 2
+  const r = LINK_ORBIT - lane * 4
+  const at = (a: number, rad: number) => ({ x: CX + Math.cos(a) * rad, y: CY + Math.sin(a) * rad })
+  const n = Math.max(2, Math.ceil((Math.abs(d) * r) / 8))
+  // Leave from the satellite's rim, on the hub side.
+  const away = Math.hypot(from.x - CX, from.y - CY)
+  const pts: Point[] = [at(a0, Math.max(r, away - 18))]
+  for (let i = 0; i <= n; i += 1) pts.push(at(a0 + (d * i) / n, r))
+  // Arrive at the station's rim, not its centre.
+  const end = at(a1, RING - st.r - 3)
+  pts.push(end)
+
+  return pts
 }
 
 export function clamp(v: number, lo: number, hi: number): number {

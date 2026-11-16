@@ -10,7 +10,7 @@ It works in the terminal, the desktop app and the VS Code extension. Desktop, VS
 
 ## The three views
 
-Switch with the **◉ Map**, **▤ Timeline** and **▦ Insights** buttons. The pane remembers your choice.
+Switch with the **◉ Map**, **▤ Timeline** and **▦ Insights** buttons beside the title. The pane remembers your choice. The picture sits at the top of the pane, so it is on screen without scrolling. Everything else follows it.
 
 ### Map
 
@@ -22,8 +22,16 @@ The hub in the middle is the main loop. Every kind of work is a station around i
 - **Badges.** A red badge counts failures and an amber badge counts calls that waited on you.
 - **Needs you.** A call waiting on a permission prompt draws a marching amber line to You, and You pulses until you answer.
 - **The route.** The main loop's last few moves between stations run round an inner orbit. The newest leg draws itself in, with an arrowhead.
-- **Subagents** are satellites beside Agents, named by their type. A small ring round each shows the mix of their calls.
-- **The hub.** It shows the turn's clock and step count. The coloured ring round it splits the busy time by kind of work, and the thin ring outside that splits tokens into cached input, new input and output.
+- **What each station is doing.** Under each station, a ▶ caption names the work running there, and `by Agent A` names the subagent doing it. When nothing is running, a dim caption names the last call. At **Names only**, captions hold names alone. At **Masked args** and **Full input**, a caption uses the call's own description when it gives one:
+  - **Model**: the model's name, and `thinking` while a step runs.
+  - **Shell**: the program and its subcommand, such as `git status` or `npm test`.
+  - **Browser**: the action and the site, such as `navigate · example.org`. Under that, `on <site>` names the site the browser is on.
+  - **Network**: the host being fetched.
+  - **Files**: the file being read or written.
+- **Memory** counts Claude's own memory files: CLAUDE.md, MEMORY.md and anything in a `memory` folder. It also counts memory MCP tools. The station shows how much memory the turn has written and read back so far, such as `3.0k chars in memory`, and the counts of saves and reads.
+- **Subagents** are satellites beside Agents. Each is labelled with its type, its model and what it is doing now. A small ring round each shows the mix of their calls.
+- **Subagent links.** A link runs from each satellite to every station that subagent used. It is tagged with the agent's letter and its call count, such as `A·3`, and it thickens with use. While one of the subagent's calls runs there, the link marches and a pulse rides along it.
+- **The hub.** It shows the turn's clock and step count, the main model, and `ctx`: the tokens of context the newest step sent. The coloured ring round it splits the busy time by kind of work, and the thin ring outside that splits tokens into cached input, new input and output.
 - **Read-outs.** Parallelism, the work done divided by the turn's length, sits top left. Tokens and the cache hit rate sit top right.
 - **Station chips.** One chip per station that was used sits under the map. Each one filters the span list to that station's calls.
 

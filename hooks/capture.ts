@@ -17,8 +17,19 @@ const SHELL = new Set(['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'Monitor
 const NETWORK = new Set(['WebFetch', 'WebSearch'])
 const AGENTS = new Set(['Agent', 'Task', 'SendMessage', 'Workflow'])
 
-export function categoryOf(tool: string): Category {
-  if (FILES.has(tool)) return 'files'
+/** Claude's own memory: CLAUDE.md, MEMORY.md and anything in a memory folder. */
+const MEMORY_PATH = /(^|[\\/])(CLAUDE(\.local)?\.md|MEMORY\.md)$|[\\/]memory[\\/][^\\/]+$/i
+
+function pathOf(args: Args): string | undefined {
+  return str(args.file_path) ?? str(args.notebook_path) ?? str(args.path)
+}
+
+export function categoryOf(tool: string, args: Args = {}): Category {
+  if (FILES.has(tool)) {
+    const file = pathOf(args)
+
+    return file && MEMORY_PATH.test(file) ? 'memory' : 'files'
+  }
   if (SHELL.has(tool)) return 'shell'
   if (NETWORK.has(tool)) return 'network'
   if (AGENTS.has(tool)) return 'agents'
@@ -196,6 +207,91 @@ export function oneLine(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()
 
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/** Programs whose second word names what they do (`git status`, `npm test`), never an argument. */
+const SUBCOMMANDS = new Set(['git', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'docker', 'kubectl', 'cargo', 'go', 'gh', 'claude', 'pip', 'uv', 'poetry', 'make', 'dotnet', 'terraform', 'helm', 'brew', 'apt', 'az', 'aws', 'gcloud'])
+
+/** A shell command as the map says it: the program, and its subcommand where it has one. */
+function shellDoing(command: string): string {
+  const words = command.trim().split(/\s+/).filter(w => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && w !== 'sudo')
+  const prog = baseName(words[0] ?? 'command')
+  const sub = words[1]
+  if (sub && SUBCOMMANDS.has(prog.replace(/\.(exe|cmd)$/i, '')) && /^[a-z][a-z0-9:-]{0,20}$/.test(sub)) return `${prog} ${sub}`
+
+  return prog
+}
+
+/** The site a call reaches, if it names one. */
+export function hostFor(tool: string, args: Args): string | undefined {
+  const url = str(args.url)
+  if (url && (NETWORK.has(tool) || categoryOf(tool, args) === 'browser')) {
+    const host = hostOf(url)
+
+    return host === 'a URL' ? undefined : host.replace(/^www\./, '')
+  }
+
+  return undefined
+}
+
+/**
+ * What the map says a call is doing, short and safe at every tier: a program
+ * and its subcommand, a host, a browser action, a memory file's name. Never an
+ * argument's value beyond those names.
+ */
+export function doingOf(tool: string, args: Args): string {
+  const cat = categoryOf(tool, args)
+  const short = (/^mcp__.+?__(.+)$/.exec(tool)?.[1] ?? tool).replace(/_/g, ' ')
+
+  if (SHELL.has(tool)) {
+    const command = str(args.command)
+    if (!command) return tool === 'BashOutput' ? 'reading output' : tool === 'KillShell' ? 'stopping a shell' : short
+    const what = shellDoing(command)
+
+    return isBackground(args) ? `${what} (background)` : what
+  }
+  if (tool === 'WebSearch') return 'searching the web'
+  if (tool === 'WebFetch') return `fetching ${hostFor(tool, args) ?? 'a page'}`
+  if (cat === 'browser') {
+    const host = hostFor(tool, args)
+    const action = str(args.action)
+    const verb = action ? action.replace(/_/g, ' ') : short
+
+    return host ? `${verb} · ${host}` : verb
+  }
+  if (cat === 'memory') {
+    const file = pathOf(args)
+    const io = memoryIo(tool)
+
+    return file ? `${io === 'write' ? 'saving' : 'recalling'} ${baseName(file)}` : short
+  }
+  if (FILES.has(tool)) {
+    const file = pathOf(args)
+
+    return file ? `${tool} ${baseName(file)}` : tool
+  }
+  if (tool === 'Agent' || tool === 'Task') return str(args.subagent_type) ?? 'an agent'
+
+  return toolName(tool)
+}
+
+/** Whether a memory call writes or reads. */
+export function memoryIo(tool: string): 'read' | 'write' {
+  if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) return 'write'
+
+  return /(write|create|add|update|save|store|set|put|delete|remove|upsert|insert|append|observe)/i.test(tool) ? 'write' : 'read'
+}
+
+/** What a memory write puts in, in characters. Reads are sized by their result. */
+export function memoryWriteSize(args: Args): number {
+  const text = str(args.content) ?? str(args.new_string) ?? str(args.new_source)
+  if (text) return text.length
+  if (Array.isArray(args.edits)) return args.edits.reduce((n: number, x: unknown) => n + String((x as Args)?.new_string ?? '').length, 0)
+  try {
+    return JSON.stringify(argsOnly(args)).length
+  } catch {
+    return 0
+  }
 }
 
 /** Whether a Bash call was sent to the background. */
