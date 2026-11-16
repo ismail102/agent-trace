@@ -7,18 +7,27 @@ import { turnLength } from './trace'
 
 /** The drawing's own units; the SVG uses them as pixels, the braille map scales them to dots. */
 export const MAP_W = 760
-export const MAP_H = 590
+export const MAP_H = 700
 
-/** Where satellites sit, as turns (radians) off the Agents bearing: beside it first, then further round. */
-const SATELLITE_TURNS = [-0.95, 0.95, -1.35, 1.35, -0.62, 0.62]
 export const CX = 380
-export const CY = 262
-/** Distance from the hub to each station. */
+export const CY = 280
+/** Distance from the hub to each station: every station sits on this ring. */
 export const RING = 188
 export const HUB_R = 50
+/** Every station's radius. Fixed, so the labels round the ring never move into each other. */
+export const STATION_R = 22
 
-/** Clockwise from the top. `you` sits at the top, `agents` at the bottom, where its satellites have room. */
-export const STATIONS: Category[] = ['you', 'model', 'files', 'shell', 'network', 'browser', 'agents', 'memory', 'tools', 'hooks']
+/** The subagents' dock: a row under the ring, joined to Agents by a bracket. */
+export const BUS_Y = 584
+export const SAT_Y = 614
+/**
+ * Dock slots, as offsets from the centre: either side of the middle first,
+ * never in it, so no link has to cross the Agents label to leave the dock.
+ */
+const SAT_SLOTS = [-76, 76, -194, 194, -312, 312]
+
+/** Clockwise from the top. `you` sits at the top, `agents` at the bottom, over its dock of satellites. */
+export const STATIONS: Category[] = ['you', 'model', 'files', 'shell', 'network', 'agents', 'browser', 'memory', 'tools', 'hooks']
 
 export const NAMES: Record<Category, string> = {
   you: 'You',
@@ -45,7 +54,7 @@ export type Station = {
   at: Point
   /** Unit vector from the hub. */
   dir: Point
-  /** Drawn radius: grows with the time spent there. */
+  /** Drawn radius: the same for every station. */
   r: number
   count: number
   busyMs: number
@@ -157,7 +166,7 @@ export function buildScene(turn: Turn, now: number): Scene {
       cat,
       at: stationPoint(cat),
       dir: { x: Math.cos(a), y: Math.sin(a) },
-      r: 15,
+      r: STATION_R,
       count: 0,
       busyMs: 0,
       errors: 0,
@@ -196,10 +205,7 @@ export function buildScene(turn: Turn, now: number): Scene {
   }
 
   const stations = STATIONS.map(c => per.get(c)!)
-  for (const st of stations) {
-    st.share = totalBusy > 0 ? st.busyMs / totalBusy : 0
-    st.r = 15 + Math.min(13, Math.sqrt(st.busyMs / 1000) * 4)
-  }
+  for (const st of stations) st.share = totalBusy > 0 ? st.busyMs / totalBusy : 0
 
   // Captions: what each station is doing now, else what it last did.
   const work = (s: Span) => !isMarker(s) && s.lane !== 'events'
@@ -261,19 +267,11 @@ export function buildScene(turn: Turn, now: number): Scene {
   const lastMain = steps.filter(s => s.lane === 'main' && s.tokIn !== undefined).pop()
   const context = lastMain ? (lastMain.tokIn ?? 0) + (lastMain.tokCache ?? 0) : 0
 
-  // Subagents: satellites beside the Agents station, either side of its
-  // label, which stands straight out from the hub.
+  // Subagents: satellites in the dock under Agents, nearest the middle first.
   const subLanes = turn.lanes.filter(l => isSub(l.id))
-  const shown = subLanes.slice(0, SATELLITE_TURNS.length)
-  const agentsAt = per.get('agents')!
-  const base = Math.atan2(agentsAt.dir.y, agentsAt.dir.x)
+  const shown = subLanes.slice(0, SAT_SLOTS.length)
   const satellites: Satellite[] = shown.map((lane, i) => {
-    const a = base + SATELLITE_TURNS[i]!
-    const reach = 74 + (i >= 2 ? 18 : 0)
-    const at = {
-      x: clamp(agentsAt.at.x + Math.cos(a) * reach, 40, MAP_W - 40),
-      y: clamp(agentsAt.at.y + Math.sin(a) * reach, 30, MAP_H - 22),
-    }
+    const at = { x: CX + SAT_SLOTS[i]!, y: SAT_Y }
     const mine = turn.spans.filter(s => s.lane === lane.id).sort((a, b) => a.t0 - b.t0)
     const byCat: Partial<Record<Category, number>> = {}
     const live = new Set<Category>()
@@ -344,11 +342,15 @@ export function buildScene(turn: Turn, now: number): Scene {
 export const LINK_ORBIT = 154
 
 /**
- * A link from a subagent to a station it used: in from the satellite to the
- * link orbit, round it the short way, and out to the station's rim.
+ * A link from a subagent to a station it used: up from the satellite through
+ * the gap in the ring beside Agents on its own side, in to the link orbit,
+ * round it the short way, and out to the station's rim. It never crosses a label.
  */
 export function satLinkPoints(from: Point, st: Station, lane: number): Point[] {
-  const a0 = Math.atan2(from.y - CY, from.x - CX)
+  const agents = Math.PI / 2
+  const gap = Math.PI / STATIONS.length
+  // The gap between Agents and its neighbour on the satellite's side.
+  const a0 = from.x < CX ? agents + gap : agents - gap
   const a1 = Math.atan2(st.at.y - CY, st.at.x - CX)
   let d = a1 - a0
   while (d > Math.PI) d -= Math.PI * 2
@@ -356,9 +358,8 @@ export function satLinkPoints(from: Point, st: Station, lane: number): Point[] {
   const r = LINK_ORBIT - lane * 4
   const at = (a: number, rad: number) => ({ x: CX + Math.cos(a) * rad, y: CY + Math.sin(a) * rad })
   const n = Math.max(2, Math.ceil((Math.abs(d) * r) / 8))
-  // Leave from the satellite's rim, on the hub side.
-  const away = Math.hypot(from.x - CX, from.y - CY)
-  const pts: Point[] = [at(a0, Math.max(r, away - 18))]
+  // Leave from the top of the satellite, through the gap.
+  const pts: Point[] = [{ x: from.x, y: from.y - 18 }, at(a0, RING + 12)]
   for (let i = 0; i <= n; i += 1) pts.push(at(a0 + (d * i) / n, r))
   // Arrive at the station's rim, not its centre.
   const end = at(a1, RING - st.r - 3)

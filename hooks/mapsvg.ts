@@ -12,9 +12,11 @@
 // from where the last one stood instead of starting over.
 
 import type { Turn } from '../types'
+import { iconSvg } from './icons'
 import { COLORS, ERR, INK, LIVE, TOKENS, WAIT } from './palette'
 import {
   AFTERGLOW_MS,
+  BUS_Y,
   CX,
   CY,
   HUB_R,
@@ -87,7 +89,96 @@ function clip(text: string, chars: number): string {
   return text.length > chars ? `${text.slice(0, chars - 1)}…` : text
 }
 
-function drawStation(st: Station, scene: Scene, out: string[]): void {
+/** A dark outline behind label text, so a line passing under it never hurts reading it. */
+const HALO = `stroke="${INK.ground}" stroke-width="3.2" stroke-linejoin="round" paint-order="stroke"`
+
+type LabelLine = { text: string; color: string; size: number; weight?: number; mono?: boolean; extra?: { text: string; color: string } }
+
+/** Where a station's label block goes and how wide its captions may run, by its side of the ring. */
+function labelSide(st: Station): 'top' | 'bottom' | 'left' | 'right' {
+  if (Math.abs(st.dir.x) < 0.3) return st.dir.y < 0 ? 'top' : 'bottom'
+
+  return st.dir.x > 0 ? 'right' : 'left'
+}
+
+/** The lines under a station's name: time, what it is doing, who, and what it holds. */
+function labelLines(st: Station, scene: Scene, room: number): LabelLine[] {
+  const color = COLORS[st.cat]
+  const used = st.count > 0
+  const lines: LabelLine[] = []
+  if (st.cat === 'you' && scene.waitingFrom.length > 0) lines.push({ text: 'NEEDS YOU', color: WAIT, size: 10.5, weight: 700 })
+  lines.push({
+    text: NAMES[st.cat],
+    color: used ? INK.text : INK.dim,
+    size: 12,
+    weight: 600,
+    // Calls running here at once ride on the name, not on the ring.
+    extra: st.running.length > 1 ? { text: ` ×${st.running.length}`, color } : undefined,
+  })
+  if (used) lines.push({ text: `${formatMs(st.busyMs)} · ${Math.round(st.share * 100)}%`, color: INK.dim, size: 10, mono: true })
+  if (st.caption) {
+    lines.push({ text: `${st.isCaptionLive ? '▶ ' : ''}${clip(st.caption, room)}`, color: st.isCaptionLive ? color : INK.dim, size: 10, weight: st.isCaptionLive ? 600 : 400 })
+    if (st.isCaptionLive && st.by && st.by !== 'main loop') lines.push({ text: clip(`by ${st.by}`, room), color: INK.dim, size: 10 })
+  }
+  if (st.cat === 'browser' && scene.browserHost && !(st.caption ?? '').includes(scene.browserHost)) {
+    lines.push({ text: clip(`on ${scene.browserHost}`, room), color: INK.dim, size: 10 })
+  }
+  if (st.cat === 'memory' && used) {
+    const m = scene.memory
+    // How much memory went through this turn, then how it split.
+    lines.push({ text: `◆ ${formatSize(m.read + m.written)} in memory`, color, size: 10, weight: 700 })
+    lines.push({ text: `${m.writes} saved · ${m.reads} read`, color: INK.dim, size: 10 })
+  }
+  // Which subagents worked here, and how many calls each made: A·3 B·1.
+  const tags = scene.satellites
+    .map(sat => ({ letter: sat.name.replace(/^Agent /, ''), link: sat.links.find(l => l.cat === st.cat) }))
+    .filter(t => t.link)
+    .map(t => `${clip(t.letter, 2)}·${t.link!.calls}`)
+  if (tags.length) lines.push({ text: clip(tags.join('  '), room), color: COLORS.agents, size: 9.5, weight: 700 })
+
+  return lines
+}
+
+const lineGap = (ln: LabelLine) => ln.size + 3
+
+/** A station's label block, clear of its ring and of its neighbours; returns how far down it reaches. */
+function drawLabel(st: Station, scene: Scene, out: string[]): number {
+  const side = labelSide(st)
+  const room = side === 'bottom' ? 20 : side === 'top' ? 30 : 24
+  const lines = labelLines(st, scene, room)
+  const height = lines.reduce((a, ln) => a + lineGap(ln), 0)
+  const { x, y } = st.at
+  // Clear of the ring, its run arc and its halo.
+  const clear = st.r + 16
+  let lx = x
+  let top = y - height / 2
+  let anchor = 'middle'
+  if (side === 'right') {
+    lx = x + clear
+    anchor = 'start'
+  } else if (side === 'left') {
+    lx = x - clear
+    anchor = 'end'
+  } else if (side === 'top') {
+    top = y - clear - height
+  } else {
+    top = y + clear - 4
+  }
+  let base = top
+  for (const ln of lines) {
+    base += lineGap(ln)
+    const font = ln.mono ? ' font-family="JetBrains Mono, Consolas, monospace"' : ''
+    out.push(
+      `<text x="${f(lx)}" y="${f(base - 3)}" text-anchor="${anchor}" font-size="${ln.size}" font-weight="${ln.weight ?? 400}" fill="${ln.color}"${font} ${HALO}>${esc(ln.text)}${
+        ln.extra ? `<tspan fill="${ln.extra.color}" font-weight="700">${esc(ln.extra.text)}</tspan>` : ''
+      }</text>`,
+    )
+  }
+
+  return top + height
+}
+
+function drawStation(st: Station, scene: Scene, out: string[]): number {
   const color = COLORS[st.cat]
   const used = st.count > 0
   const { x, y } = st.at
@@ -119,49 +210,22 @@ function drawStation(st: Station, scene: Scene, out: string[]): void {
     )
   }
 
-  out.push(
-    `<circle cx="${f(x)}" cy="${f(y)}" r="${f(st.r)}" fill="${used ? color : INK.ground}" fill-opacity="${used ? 0.16 : 1}" stroke="${used ? color : INK.faint}" stroke-width="${used ? 2 : 1.2}"/>`,
-    `<text x="${f(x)}" y="${f(y + 4.5)}" text-anchor="middle" font-size="${st.count > 99 ? 10 : 13}" font-weight="700" fill="${used ? INK.text : INK.faint}" font-family="JetBrains Mono, Consolas, monospace">${used ? st.count : '·'}</text>`,
-  )
-
-  // The name outside the ring, then time and share.
-  const lx = x + st.dir.x * (st.r + 16)
-  const ly = y + st.dir.y * (st.r + 16)
-  const anchor = Math.abs(st.dir.x) < 0.3 ? 'middle' : st.dir.x > 0 ? 'start' : 'end'
-  const top = st.dir.y < -0.6
-  const nameY = top ? ly - 12 : st.dir.y > 0.6 ? ly + 10 : ly - 2
-  out.push(
-    `<text x="${f(lx)}" y="${f(nameY)}" text-anchor="${anchor}" font-size="12" font-weight="600" fill="${used ? INK.text : INK.dim}">${NAMES[st.cat]}</text>`,
-  )
+  // Idle: a white ring round a white icon. Used: the station's colour, the
+  // icon sunk to a watermark and the call count bright on top of it.
   if (used) {
     out.push(
-      `<text x="${f(lx)}" y="${f(nameY + 13)}" text-anchor="${anchor}" font-size="10" fill="${INK.dim}" font-family="JetBrains Mono, Consolas, monospace">${esc(formatMs(st.busyMs))} · ${Math.round(st.share * 100)}%</text>`,
+      `<circle cx="${f(x)}" cy="${f(y)}" r="${f(st.r)}" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2"/>`,
+      iconSvg(st.cat, x, y, st.r * 1.3, color, 0.24),
+      `<text x="${f(x)}" y="${f(y + 6)}" text-anchor="middle" font-size="${st.count > 99 ? 13 : 17}" font-weight="800" fill="#FFFFFF" stroke="${INK.well}" stroke-width="3.5" stroke-linejoin="round" paint-order="stroke" font-family="JetBrains Mono, Consolas, monospace">${st.count}</text>`,
+    )
+  } else {
+    out.push(
+      `<circle cx="${f(x)}" cy="${f(y)}" r="${f(st.r)}" fill="${INK.ground}" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="1.6"/>`,
+      iconSvg(st.cat, x, y, st.r, '#FFFFFF', 0.9),
     )
   }
 
-  // Captions: what it is doing now (bright, with who is doing it), else what it last did.
-  const lines: { text: string; color: string; weight?: number }[] = []
-  const room = anchor === 'middle' ? 30 : 24
-  if (st.caption) {
-    lines.push({ text: `${st.isCaptionLive ? '▶ ' : ''}${clip(st.caption, room)}`, color: st.isCaptionLive ? color : INK.dim, weight: st.isCaptionLive ? 600 : 400 })
-    if (st.isCaptionLive && st.by && st.by !== 'main loop') lines.push({ text: clip(`by ${st.by}`, room), color: INK.dim })
-  }
-  if (st.cat === 'browser' && scene.browserHost && !(st.caption ?? '').includes(scene.browserHost)) {
-    lines.push({ text: clip(`on ${scene.browserHost}`, room), color: INK.dim })
-  }
-  if (st.cat === 'memory' && used) {
-    const m = scene.memory
-    // How much memory went through this turn, then how it split.
-    lines.push({ text: `◆ ${formatSize(m.read + m.written)} in memory`, color, weight: 700 })
-    lines.push({ text: `${m.writes} saved · ${m.reads} read`, color: INK.dim })
-  }
-  lines.forEach((ln, i) => {
-    // Above the name for the top station; under the time line everywhere else.
-    const yy = top ? nameY - 13 * (lines.length - i) : nameY + 26 + i * 12
-    out.push(
-      `<text x="${f(lx)}" y="${f(yy)}" text-anchor="${anchor}" font-size="10" font-weight="${ln.weight ?? 400}" fill="${ln.color}">${esc(ln.text)}</text>`,
-    )
-  })
+  const reach = drawLabel(st, scene, out)
 
   // Badges: failures top right, waits on you top left.
   const bx = st.r * 0.75
@@ -177,13 +241,9 @@ function drawStation(st: Station, scene: Scene, out: string[]): void {
       `<text x="${f(x - bx)}" y="${f(y - bx + 3.5)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1A1206">${st.waits}</text>`,
     )
   }
-  if (st.running.length > 1) {
-    out.push(
-      `<text x="${f(x + st.r + 4)}" y="${f(y + st.r + 4)}" font-size="10" font-weight="700" fill="${color}">×${st.running.length}</text>`,
-    )
-  }
   out.push('</g>')
 
+  return reach
 }
 
 /** The animated map of one turn, as an SVG document. */
@@ -262,17 +322,14 @@ export function mapSvg(turn: Turn, now: number): string {
   if (scene.waitingFrom.length > 0) {
     out.push(
       `<circle cx="${f(you.at.x)}" cy="${f(you.at.y)}" r="${f(you.r + 8)}" fill="none" stroke="${WAIT}" stroke-width="2"><animate attributeName="r" values="${f(you.r + 4)};${f(you.r + 16)}" dur="1.2s" begin="${begin(scene.nowRel % 1200)}" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur="1.2s" begin="${begin(scene.nowRel % 1200)}" repeatCount="indefinite"/></circle>`,
-      `<text x="${f(you.at.x - you.r - 14)}" y="${f(you.at.y + 4)}" text-anchor="end" font-size="10.5" font-weight="700" fill="${WAIT}">NEEDS YOU</text>`,
     )
   }
 
-  // Satellites: each subagent, linked to Agents, ringed by its own mix of calls.
-  const agents = scene.stations.find(s => s.cat === 'agents')!
-
+  // Satellites: each subagent, docked under Agents, ringed by its own mix of calls.
   // Each subagent's links to the stations it used: thicker with more calls, a
-  // pulse riding the link while one of its calls runs there, named by its letter.
+  // pulse riding the link while one of its calls runs there. The station's
+  // label names the letters and their counts.
   scene.satellites.forEach((sat, i) => {
-    const letter = sat.name.replace(/^Agent /, '')
     for (const link of sat.links) {
       const st = scene.stations.find(s => s.cat === link.cat)
       if (!st) continue
@@ -291,22 +348,11 @@ export function mapSvg(turn: Turn, now: number): string {
           `<circle r="3.4" fill="${color}" filter="url(#glow)"><animateMotion path="${d}" dur="${f(dur)}s" begin="${begin(scene.nowRel % (dur * 1000))}" repeatCount="indefinite"/></circle>`,
         )
       }
-      // The link's name, near where it arrives.
-      const tag = pts[Math.max(1, pts.length - 5)]!
-      out.push(
-        `<g><rect x="${f(tag.x - 15)}" y="${f(tag.y - 8)}" width="30" height="13" rx="6.5" fill="${INK.well}" stroke="${color}" stroke-width="0.8" opacity="0.92"/>`,
-        `<text x="${f(tag.x)}" y="${f(tag.y + 2)}" text-anchor="middle" font-size="8.5" font-weight="700" fill="${color}">${esc(clip(letter, 2))}·${link.calls}</text></g>`,
-      )
     }
   })
 
   for (const sat of scene.satellites) {
     const color = COLORS.agents
-    out.push(
-      `<line x1="${f(agents.at.x)}" y1="${f(agents.at.y)}" x2="${f(sat.at.x)}" y2="${f(sat.at.y)}" stroke="${color}" stroke-width="1.4" stroke-dasharray="${sat.isRunning ? '4 4' : '1 4'}" opacity="0.7">${
-        sat.isRunning ? `<animate attributeName="stroke-dashoffset" from="16" to="0" dur="0.9s" begin="${begin(scene.nowRel % 900)}" repeatCount="indefinite"/>` : ''
-      }</line>`,
-    )
     const total = Object.values(sat.byCat).reduce((a, b) => a + (b ?? 0), 0)
     const parts = STATIONS.filter(c => (sat.byCat[c] ?? 0) > 0).map(c => ({
       share: (sat.byCat[c] ?? 0) / Math.max(1, total),
@@ -318,10 +364,10 @@ export function mapSvg(turn: Turn, now: number): string {
       `<circle cx="${f(sat.at.x)}" cy="${f(sat.at.y)}" r="12" fill="${INK.well}" stroke="${color}" stroke-width="1.5"/>`,
       ring(sat.at.x, sat.at.y, 16, 3.5, parts),
       `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 4)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}">${esc(sat.name.replace(/^Agent /, ''))}</text>`,
-      `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 31)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK.text}">${esc(clip(sat.sub || sat.name, 18))}</text>`,
-      sat.model ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 42)}" text-anchor="middle" font-size="8.5" fill="${COLORS.model}">${esc(clip(sat.model, 18))}</text>` : '',
+      `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 31)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK.text}" ${HALO}>${esc(clip(sat.sub || sat.name, 18))}</text>`,
+      sat.model ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + 42)}" text-anchor="middle" font-size="8.5" fill="${COLORS.model}" ${HALO}>${esc(clip(sat.model, 18))}</text>` : '',
       sat.doing
-        ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + (sat.model ? 53 : 42))}" text-anchor="middle" font-size="8.5" fill="${sat.isRunning ? color : INK.dim}">${esc(clip(`${sat.isRunning ? '▶ ' : ''}${sat.doing}`, 20))}</text>`
+        ? `<text x="${f(sat.at.x)}" y="${f(sat.at.y + (sat.model ? 53 : 42))}" text-anchor="middle" font-size="8.5" fill="${sat.isRunning ? color : INK.dim}" ${HALO}>${esc(clip(`${sat.isRunning ? '▶ ' : ''}${sat.doing}`, 20))}</text>`
         : '',
       '</g>',
     )
@@ -332,7 +378,7 @@ export function mapSvg(turn: Turn, now: number): string {
     }
   }
   if (scene.hiddenAgents > 0) {
-    out.push(`<text x="${f(agents.at.x)}" y="${f(Math.min(MAP_H - 8, agents.at.y + 112))}" text-anchor="middle" font-size="10" fill="${INK.dim}">+${scene.hiddenAgents} more agents</text>`)
+    out.push(`<text x="${MAP_W - 16}" y="${BUS_Y - 10}" text-anchor="end" font-size="10" fill="${INK.dim}" ${HALO}>+${scene.hiddenAgents} more agents</text>`)
   }
 
   // Comets coming home: each call that just ended runs back to the hub and fades.
@@ -365,7 +411,23 @@ export function mapSvg(turn: Turn, now: number): string {
     })
   }
 
-  for (const st of scene.stations) drawStation(st, scene, out)
+  let agentsReach = 0
+  for (const st of scene.stations) {
+    const reach = drawStation(st, scene, out)
+    if (st.cat === 'agents') agentsReach = reach
+  }
+
+  // The dock's bracket: down from under the Agents label, along, and down to each satellite.
+  if (scene.satellites.length > 0) {
+    const xs = scene.satellites.map(s => s.at.x)
+    const live = scene.satellites.some(s => s.isRunning)
+    const drops = scene.satellites.map(s => `M${f(s.at.x)} ${BUS_Y} V${f(s.at.y - 18)}`).join(' ')
+    out.push(
+      `<path d="M${CX} ${f(agentsReach + 4)} V${BUS_Y} M${f(Math.min(...xs, CX))} ${BUS_Y} H${f(Math.max(...xs, CX))} ${drops}" fill="none" stroke="${COLORS.agents}" stroke-width="1.4" stroke-dasharray="${live ? '4 4' : '1 4'}" stroke-linecap="round" opacity="0.7">${
+        live ? `<animate attributeName="stroke-dashoffset" from="16" to="0" dur="0.9s" begin="${begin(scene.nowRel % 900)}" repeatCount="indefinite"/>` : ''
+      }</path>`,
+    )
+  }
 
   // The hub: where the time went, the tokens, the clock.
   const u = turn.usage

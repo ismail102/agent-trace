@@ -14,11 +14,13 @@ Switch with the **◉ Map**, **▤ Timeline** and **▦ Insights** buttons besid
 
 ### Map
 
-The hub in the middle is the main loop. Every kind of work is a station around it: You, Model, Files, Shell, Network, Browser, Agents, Memory, Other tools and Hooks.
+The hub in the middle is the main loop. Every kind of work is a station on the ring around it: You, Model, Files, Shell, Network, Agents, Browser, Memory, Other tools and Hooks.
+
+- **Stations.** Before a station is used, it is a white ring with its icon inside. Once used, it takes its colour, the icon fades to a watermark and the number of calls stands out bright on top. Every station is the same size, and each label block sits clear of the ring and of its neighbours, so no text overlaps.
 
 - **Pulses.** A running call sends a pulse with a short tail out along its station's spoke, over and over until it ends. Then a comet runs back to the hub and fades. A failed call's comet is red, and its station flashes.
-- **Worn spokes.** A spoke grows thicker and brighter the more its station is used. A station grows with the time spent there, and the number inside it counts its calls.
-- **Running time.** While a call runs, a dashed ring turns round its station and an arc fills over 30 seconds. `×3` means three calls there at once.
+- **Worn spokes.** A spoke grows thicker and brighter the more its station is used. The time spent there and its share of the turn sit under the station's name.
+- **Running time.** While a call runs, a dashed ring turns round its station and an arc fills over 30 seconds. `×3` beside the name means three calls there at once.
 - **Badges.** A red badge counts failures and an amber badge counts calls that waited on you.
 - **Needs you.** A call waiting on a permission prompt draws a marching amber line to You, and You pulses until you answer.
 - **The route.** The main loop's last few moves between stations run round an inner orbit. The newest leg draws itself in, with an arrowhead.
@@ -29,8 +31,8 @@ The hub in the middle is the main loop. Every kind of work is a station around i
   - **Network**: the host being fetched.
   - **Files**: the file being read or written.
 - **Memory** counts Claude's own memory files: CLAUDE.md, MEMORY.md and anything in a `memory` folder. It also counts memory MCP tools. The station shows how much memory the turn has written and read back so far, such as `3.0k chars in memory`, and the counts of saves and reads.
-- **Subagents** are satellites beside Agents. Each is labelled with its type, its model and what it is doing now. A small ring round each shows the mix of their calls.
-- **Subagent links.** A link runs from each satellite to every station that subagent used. It is tagged with the agent's letter and its call count, such as `A·3`, and it thickens with use. While one of the subagent's calls runs there, the link marches and a pulse rides along it.
+- **Subagents** are satellites in a row under the ring, joined to Agents by a bracket. Each is labelled with its type, its model and what it is doing now. A small ring round each shows the mix of their calls.
+- **Subagent links.** A link runs from each satellite, through the gap in the ring beside Agents, to every station that subagent used. It thickens with use. The station's label lists each agent's letter and its call count, such as `A·3 B·1`. While one of the subagent's calls runs there, the link marches and a pulse rides along it.
 - **The hub.** It shows the turn's clock and step count, the main model, and `ctx`: the tokens of context the newest step sent. The coloured ring round it splits the busy time by kind of work, and the thin ring outside that splits tokens into cached input, new input and output.
 - **Read-outs.** Parallelism, the work done divided by the turn's length, sits top left. Tokens and the cache hit rate sit top right.
 - **Station chips.** One chip per station that was used sits under the map. Each one filters the span list to that station's calls.

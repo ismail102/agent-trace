@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Station icons.** Each station on the ring has its own icon. An idle station is a white ring with a white icon. Once used, the icon fades to a watermark under a bright call count.
+- **No overlapping text on the map.** Every station is the same size, and each label block is placed clear of its ring and its neighbours, with a dark outline so lines under it stay readable. `×N` moves beside the station's name, and `NEEDS YOU` moves into You's label.
+- **Subagents dock under the ring.** Satellites sit in a row below Agents, which is now at the bottom of the ring, joined to it by a bracket. Their links pass through the gaps beside Agents. The `A·3` tags move into each station's label, so they no longer stack on each other.
+
 ## 0.3.0
 
 - **The graph comes first.** The title, the view switch and the history buttons share one row. The picture comes straight after them, followed by the turn summary, the spans, the inspector and the detail kept.
